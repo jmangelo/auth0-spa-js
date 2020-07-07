@@ -543,6 +543,8 @@ export default class Auth0Client {
       scope: getUniqueScopes(this.defaultScope, this.scope, options.scope)
     };
 
+    let acquiredLock = false;
+
     try {
       if (!ignoreCache) {
         const cache = this.cache.get(
@@ -555,11 +557,30 @@ export default class Auth0Client {
         );
 
         if (cache && cache.access_token) {
+          console.log("Got access token from cache.")
+
           return cache.access_token;
         }
       }
 
-      await lock.acquireLock(GET_TOKEN_SILENTLY_LOCK_KEY, 5000);
+      acquiredLock = await lock.acquireLock(GET_TOKEN_SILENTLY_LOCK_KEY, 5000);
+
+      if (!ignoreCache) {
+        const cache = this.cache.get(
+          {
+            scope: getTokenOptions.scope,
+            audience: getTokenOptions.audience || 'default',
+            client_id: this.options.client_id
+          },
+          60 // get a new token if within 60 seconds of expiring
+        );
+
+        if (cache && cache.access_token) {
+          console.log("Got access token from cache after waiting on lock.")
+
+          return cache.access_token;
+        }
+      }
 
       // Only get an access token using a refresh token if:
       // * refresh tokens are enabled
@@ -579,7 +600,9 @@ export default class Auth0Client {
     } catch (e) {
       throw e;
     } finally {
-      await lock.releaseLock(GET_TOKEN_SILENTLY_LOCK_KEY);
+      if (acquiredLock) {
+        await lock.releaseLock(GET_TOKEN_SILENTLY_LOCK_KEY);
+      }
     }
   }
 
@@ -690,8 +713,8 @@ export default class Auth0Client {
       nonceIn,
       code_challenge,
       options.redirect_uri ||
-        this.options.redirect_uri ||
-        window.location.origin
+      this.options.redirect_uri ||
+      window.location.origin
     );
 
     const url = this._authorizeUrl({
